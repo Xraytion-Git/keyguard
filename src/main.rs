@@ -198,8 +198,8 @@ unsafe extern "system" fn keyboard_proc(
         return CallNextHookEx(None, n_code, wparam, lparam);
     }
 
-    // 只拦"按下"事件（1=WM_KEYDOWN, 3=WM_SYSKEYDOWN）
-    if wparam.0 != 1 && wparam.0 != 3 {
+    // 只拦"按下"事件（WM_KEYDOWN=0x0100, WM_SYSKEYDOWN=0x0104）
+    if wparam.0 != 0x0100 && wparam.0 != 0x0104 {
         return LRESULT(0);
     }
 
