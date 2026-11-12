@@ -181,7 +181,7 @@ fn parse_shortcut(input: &str) -> Option<(u32, u16)> {
 // ============================================================
 // 全局状态
 // ============================================================
-static BLOCKED: std::sync::OnceLock<Vec<(u32, u16)>> = std::sync::OnceLock::new();
+static BLOCKED: std::sync::Mutex<Vec<(u32, u16)>> = std::sync::Mutex::new(Vec::new());
 static TRAY_ICON: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
 /// 拦截开关：true=拦截生效，false=临时放行
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -241,7 +241,7 @@ unsafe extern "system" fn keyboard_proc(
     }
 
     // 命中拦截列表则吃掉
-    if let Some(blocked) = BLOCKED.get() {
+    if let Ok(blocked) = BLOCKED.lock() {
         for &(b_mods, b_vk) in blocked.iter() {
             if b_vk as u32 == vk && (b_mods & mods) == b_mods {
                 return LRESULT(1);
@@ -410,10 +410,16 @@ fn handle_tray_message(hwnd: HWND, lparam: i32) {
             );
             let cmd = ret.0 as i32;
             if cmd == mid_reload {
-                if let Ok(exe) = std::env::current_exe() {
-                    let _ = std::process::Command::new(&exe).spawn();
+                // 热重载配置（不重启）
+                let cfg = Config::load();
+                ENABLED.store(cfg.enabled, std::sync::atomic::Ordering::Relaxed);
+                let mut parsed: Vec<(u32, u16)> = Vec::new();
+                for s in &cfg.shortcuts {
+                    if let Some((m, vk)) = parse_shortcut(s) {
+                        parsed.push((m, vk));
+                    }
                 }
-                std::process::exit(0);
+                *BLOCKED.lock().unwrap() = parsed;
             } else if cmd == mid_settings {
                 show_settings_dialog();
             } else if cmd == mid_autostart {
@@ -523,7 +529,7 @@ fn show_settings_dialog() {
                         LRESULT(0)
                     }
                     x if x == IDC_SAVE => {
-                        save_and_restart(hwnd);
+                        save_config(hwnd);
                         LRESULT(0)
                     }
                     _ => LRESULT(0),
@@ -818,7 +824,7 @@ fn delete_selected(hwnd: HWND) {
     }
 }
 
-fn save_and_restart(hwnd: HWND) {
+fn save_config(hwnd: HWND) {
     let mut shortcuts: Vec<String> = Vec::new();
     let mut enabled = true;
     unsafe {
@@ -843,21 +849,30 @@ fn save_and_restart(hwnd: HWND) {
         }
     }
 
-    // 写入配置
-    let config = Config { enabled, shortcuts };
+    // 写入配置文件
+    let config = Config { enabled, shortcuts: shortcuts.clone() };
     config.save();
 
-    // 提示并重启
-    let msg: Vec<u16> = "配置已保存，正在重启 keyguard 生效...\0".encode_utf16().collect();
+    // 热更新运行时状态（不重启！）
+    ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    let mut parsed: Vec<(u32, u16)> = Vec::new();
+    for s in &shortcuts {
+        if let Some((m, vk)) = parse_shortcut(s) {
+            parsed.push((m, vk));
+        }
+    }
+    *BLOCKED.lock().unwrap() = parsed;
+
+    // 提示
+    let status = if enabled { "拦截已启用" } else { "拦截已停用" };
+    let msg: Vec<u16> = format!("{status}，配置已生效（无需重启）\0").encode_utf16().collect();
     unsafe {
         MessageBoxW(Some(hwnd), windows::core::PCWSTR(msg.as_ptr()),
             windows::core::PCWSTR("keyguard\0".encode_utf16().collect::<Vec<u16>>().as_ptr()), MB_OK);
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::process::Command::new(&exe).spawn();
-    }
-    std::process::exit(0);
+    // 关闭设置窗口
+    unsafe { DestroyWindow(hwnd) };
 }
 
 // ============================================================
@@ -917,7 +932,8 @@ fn main() {
             None => {}
         }
     }
-    let _ = BLOCKED.set(blocked);
+    // 初始化拦截规则
+    *BLOCKED.lock().unwrap() = blocked;
     // 初始化拦截开关
     ENABLED.store(config.enabled, std::sync::atomic::Ordering::Relaxed);
 
