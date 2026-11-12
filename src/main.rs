@@ -50,6 +50,10 @@ const IDC_DELETE: u16 = 2004;
 const IDC_SAVE: u16 = 2005;
 const IDC_LABEL_LIST: u16 = 2006;
 const IDC_LABEL_ADD: u16 = 2007;
+const IDC_ENABLED: u16 = 2008;
+const IDC_HEADER: u16 = 2009;
+const IDC_SEP1: u16 = 2010;
+const IDC_SEP2: u16 = 2011;
 
 // 列表框消息
 const LB_ADDSTRING: u32 = 0x0180;
@@ -60,19 +64,34 @@ const LB_GETCOUNT: u32 = 0x018B;
 const LB_GETTEXTLEN: u32 = 0x018A;
 const LB_GETTEXT: u32 = 0x0189;
 
+// 按钮消息
+const BM_GETCHECK: u32 = 0x00F0;
+const BM_SETCHECK: u32 = 0x00F1;
+const BST_CHECKED: usize = 1;
+const BST_UNCHECKED: usize = 0;
+const BS_AUTOCHECKBOX: u32 = 0x00000003;
+
 // ============================================================
 // 配置
 // ============================================================
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Config {
+    /// 拦截开关：true=拦截生效，false=临时放行
+    #[serde(default = "default_true")]
+    enabled: bool,
     /// 要拦截的组合键列表，每项形如 "Ctrl+Win+D"
     #[serde(default)]
     shortcuts: Vec<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Config {
     fn with_default() -> Self {
         Self {
+            enabled: true,
             shortcuts: vec!["Ctrl+Win+D".into()],
         }
     }
@@ -164,6 +183,8 @@ fn parse_shortcut(input: &str) -> Option<(u32, u16)> {
 // ============================================================
 static BLOCKED: std::sync::OnceLock<Vec<(u32, u16)>> = std::sync::OnceLock::new();
 static TRAY_ICON: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+/// 拦截开关：true=拦截生效，false=临时放行
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 // ============================================================
 // 键盘钩子回调
@@ -198,6 +219,11 @@ unsafe extern "system" fn keyboard_proc(
     let hook_struct = unsafe { &*raw };
     let vk = hook_struct.vk_code;
     let flags = hook_struct.flags;
+
+    // 拦截开关：关闭时直接放行
+    if !ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return LRESULT(0);
+    }
 
     // LLKHF_INJECTED = 0x10：跳过软件注入的按键
     if flags & 0x10 != 0 {
@@ -546,9 +572,9 @@ fn show_settings_dialog() {
             windows::core::PCWSTR(title.as_ptr()),
             WS_OVERLAPPEDWINDOW,
             300,
-            200,
-            440,
-            420,
+            150,
+            460,
+            500,
             None,
             None,
             Some(module.into()),
@@ -567,45 +593,111 @@ fn create_settings_controls(parent: HWND) {
         let cls_edit: Vec<u16> = "EDIT\0".encode_utf16().collect();
         let cls_button: Vec<u16> = "BUTTON\0".encode_utf16().collect();
         let cls = |s: &Vec<u16>| windows::core::PCWSTR(s.as_ptr());
+        let p = |s: &str| {
+            let v: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+            windows::core::PCWSTR(v.as_ptr())
+        };
+        // 闭包捕获 v，需要让 v 活着——用 leak 保证生命周期
+        let pl = |s: &str| {
+            let v: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+            let leaked: &'static [u16] = Box::leak(v.into_boxed_slice());
+            windows::core::PCWSTR(leaked.as_ptr())
+        };
 
-        // 标签
-        let lbl1: Vec<u16> = "当前拦截规则:\0".encode_utf16().collect();
+        let style_child = WS_CHILD | WS_VISIBLE;
+
+        // ── 标题栏 ──
         CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
             cls(&cls_static),
-            windows::core::PCWSTR(lbl1.as_ptr()),
-            WS_CHILD | WS_VISIBLE,
-            15, 12, 390, 20,
-            Some(parent),
-            Some(HMENU(IDC_LABEL_LIST as _)),
-            None, None,
+            pl("keyguard  ⚡ 快捷键拦截工具"),
+            style_child,
+            15, 12, 410, 28,
+            Some(parent), Some(HMENU(IDC_HEADER as _)), None, None,
         );
 
-        // 列表框（用 WINDOW_STYLE 组合原始值）
+        // ── 分隔线 1 ──
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_static),
+            pl(""),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | 0x00000010), // SS_ETCHEDHORZ
+            15, 46, 410, 2,
+            Some(parent), Some(HMENU(IDC_SEP1 as _)), None, None,
+        );
+
+        // ── 拦截开关区 ──
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_static),
+            pl("拦截开关"),
+            style_child,
+            15, 56, 200, 20,
+            Some(parent), None, None, None,
+        );
+
+        // 复选框：拦截已启用
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_button),
+            pl("启用快捷键拦截"),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | BS_AUTOCHECKBOX
+            ),
+            15, 78, 200, 22,
+            Some(parent), Some(HMENU(IDC_ENABLED as _)), None, None,
+        );
+
+        // 提示文字
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_static),
+            pl("取消勾选可临时放行所有快捷键，再次勾选恢复拦截"),
+            style_child,
+            15, 104, 410, 18,
+            Some(parent), None, None, None,
+        );
+
+        // ── 分隔线 2 ──
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_static),
+            pl(""),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | 0x00000010),
+            15, 130, 410, 2,
+            Some(parent), Some(HMENU(IDC_SEP2 as _)), None, None,
+        );
+
+        // ── 拦截规则区 ──
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_static),
+            pl("拦截规则列表"),
+            style_child,
+            15, 140, 200, 20,
+            Some(parent), None, None, None,
+        );
+
+        // 列表框
         CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
             cls(&cls_listbox),
             windows::core::PCWSTR::null(),
             windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
-                WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_VSCROLL.0 | 0x0100 // LBS_NOINTEGRALHEIGHT
+                WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_VSCROLL.0 | 0x0100
             ),
-            15, 32, 390, 180,
-            Some(parent),
-            Some(HMENU(IDC_LIST as _)),
-            None, None,
+            15, 162, 410, 140,
+            Some(parent), Some(HMENU(IDC_LIST as _)), None, None,
         );
 
-        // 标签
-        let lbl2: Vec<u16> = "添加新规则 (如 Ctrl+Win+D):\0".encode_utf16().collect();
+        // ── 添加规则区 ──
         CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
             cls(&cls_static),
-            windows::core::PCWSTR(lbl2.as_ptr()),
-            WS_CHILD | WS_VISIBLE,
-            15, 220, 390, 20,
-            Some(parent),
-            Some(HMENU(IDC_LABEL_ADD as _)),
-            None, None,
+            pl("添加新规则（格式如 Ctrl+Win+D）"),
+            style_child,
+            15, 312, 410, 20,
+            Some(parent), None, None, None,
         );
 
         // 输入框
@@ -616,55 +708,53 @@ fn create_settings_controls(parent: HWND) {
             windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
                 WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_TABSTOP.0 | 0x0080
             ),
-            15, 242, 260, 26,
-            Some(parent),
-            Some(HMENU(IDC_EDIT as _)),
-            None, None,
+            15, 336, 300, 28,
+            Some(parent), Some(HMENU(IDC_EDIT as _)), None, None,
         );
 
         // "添加" 按钮
-        let btn_add: Vec<u16> = "添加\0".encode_utf16().collect();
         CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
             cls(&cls_button),
-            windows::core::PCWSTR(btn_add.as_ptr()),
+            pl("＋  添加"),
             windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
                 WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0
             ),
-            285, 242, 80, 26,
-            Some(parent),
-            Some(HMENU(IDC_ADD as _)),
-            None, None,
+            325, 336, 100, 28,
+            Some(parent), Some(HMENU(IDC_ADD as _)), None, None,
         );
 
-        // "删除选中" 按钮
-        let btn_del: Vec<u16> = "删除选中\0".encode_utf16().collect();
+        // ── 分隔线 3 ──
         CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
-            cls(&cls_button),
-            windows::core::PCWSTR(btn_del.as_ptr()),
-            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
-                WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0
-            ),
-            15, 285, 120, 30,
-            Some(parent),
-            Some(HMENU(IDC_DELETE as _)),
-            None, None,
+            cls(&cls_static),
+            pl(""),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | 0x00000010),
+            15, 380, 410, 2,
+            Some(parent), None, None, None,
         );
 
-        // "保存" 按钮
-        let btn_save: Vec<u16> = "保存并生效\0".encode_utf16().collect();
+        // ── 操作按钮区 ──
         CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
             cls(&cls_button),
-            windows::core::PCWSTR(btn_save.as_ptr()),
+            pl("删除选中"),
             windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
                 WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0
             ),
-            15, 335, 120, 30,
-            Some(parent),
-            Some(HMENU(IDC_SAVE as _)),
-            None, None,
+            15, 398, 120, 34,
+            Some(parent), Some(HMENU(IDC_DELETE as _)), None, None,
+        );
+
+        CreateWindowExW(
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+            cls(&cls_button),
+            pl("保存并生效"),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0
+            ),
+            305, 398, 120, 34,
+            Some(parent), Some(HMENU(IDC_SAVE as _)), None, None,
         );
     }
 }
@@ -672,10 +762,14 @@ fn create_settings_controls(parent: HWND) {
 fn populate_list(hwnd: HWND) {
     let config = Config::load();
     unsafe {
+        // 设置勾选框状态
+        let check_hwnd = GetDlgItem(Some(hwnd), IDC_ENABLED as i32).unwrap_or_default();
+        let check_state = if config.enabled { BST_CHECKED } else { BST_UNCHECKED };
+        SendMessageW(check_hwnd, BM_SETCHECK, Some(WPARAM(check_state)), Some(LPARAM(0)));
+
+        // 填充列表
         let list_hwnd = GetDlgItem(Some(hwnd), IDC_LIST as i32).unwrap_or_default();
-        // 清空列表
         SendMessageW(list_hwnd, LB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
-        // 添加每条规则
         for s in &config.shortcuts {
             let item: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
             SendMessageW(list_hwnd, LB_ADDSTRING, Some(WPARAM(0)), Some(LPARAM(item.as_ptr() as isize)));
@@ -726,7 +820,14 @@ fn delete_selected(hwnd: HWND) {
 
 fn save_and_restart(hwnd: HWND) {
     let mut shortcuts: Vec<String> = Vec::new();
+    let mut enabled = true;
     unsafe {
+        // 读取勾选框状态
+        let check_hwnd = GetDlgItem(Some(hwnd), IDC_ENABLED as i32).unwrap_or_default();
+        let check = SendMessageW(check_hwnd, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0)));
+        enabled = check.0 == BST_CHECKED as isize;
+
+        // 读取列表
         let list_hwnd = GetDlgItem(Some(hwnd), IDC_LIST as i32).unwrap_or_default();
         let count = SendMessageW(list_hwnd, LB_GETCOUNT, Some(WPARAM(0)), Some(LPARAM(0)));
         for i in 0..count.0 {
@@ -743,7 +844,7 @@ fn save_and_restart(hwnd: HWND) {
     }
 
     // 写入配置
-    let config = Config { shortcuts };
+    let config = Config { enabled, shortcuts };
     config.save();
 
     // 提示并重启
@@ -817,6 +918,8 @@ fn main() {
         }
     }
     let _ = BLOCKED.set(blocked);
+    // 初始化拦截开关
+    ENABLED.store(config.enabled, std::sync::atomic::Ordering::Relaxed);
 
     // 3. 装钩子
     let hook = match unsafe {
