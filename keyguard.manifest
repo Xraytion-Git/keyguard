@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" processorArchitecture="amd64" name="keyguard" type="win32"/>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="amd64" publicKeyToken="6595b64144ccf1df"/>
+    </dependentAssembly>
+  </dependency>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8eabcdef-1573-4a42-951a-55b5e37a45d1}"/>
+      <supportedOS Id="{1f676c39-2157-4b25-a311-484e8c3c1e7a}"/>
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e3f}"/>
+      <supportedOS Id="{35138b9a-5d96-40b5-91e5-244e1f1b9e98}"/>
+      <supportedOS Id="{e80c3485-e83f-4f1e-806a-a1a51e104d2c}"/>
+    </application>
+  </compatibility>
+</assembly>

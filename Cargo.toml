@@ -1,0 +1,24 @@
+[package]
+name = "keyguard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+] }
+
+[profile.release]
+strip = true
+lto = true
+panic = "abort"
+
+# 管理员 manifest + icon 通过 build.rs 嵌入（编译时链接 res.o）

@@ -1,0 +1,7 @@
+/target/
+*.exe
+*.o
+*.ico
+keyboard.png
+keyguard.png
+make_icon.py
