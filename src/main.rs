@@ -863,15 +863,7 @@ fn save_config(hwnd: HWND) {
     }
     *BLOCKED.lock().unwrap() = parsed;
 
-    // 提示
-    let status = if enabled { "拦截已启用" } else { "拦截已停用" };
-    let msg: Vec<u16> = format!("{status}，配置已生效（无需重启）\0").encode_utf16().collect();
-    unsafe {
-        MessageBoxW(Some(hwnd), windows::core::PCWSTR(msg.as_ptr()),
-            windows::core::PCWSTR("keyguard\0".encode_utf16().collect::<Vec<u16>>().as_ptr()), MB_OK);
-    }
-
-    // 关闭设置窗口
+    // 关闭设置窗口（静默保存，不弹窗）
     unsafe { DestroyWindow(hwnd) };
 }
 
