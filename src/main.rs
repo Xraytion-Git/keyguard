@@ -515,13 +515,16 @@ fn show_settings_dialog() {
     let module = unsafe { GetModuleHandleW(None) }.ok().unwrap_or_default();
     let cur_name: Vec<u16> = "32512\0".encode_utf16().collect();
     use windows::Win32::UI::WindowsAndMessaging::WNDCLASSW;
+    // 加载自定义图标
+    let hicon = load_ico().map(|h| windows::Win32::UI::WindowsAndMessaging::HICON(h as *mut _))
+        .unwrap_or_default();
     let wc = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(settings_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: module.into(),
-        hIcon: Default::default(),
+        hIcon: hicon,
         hCursor: unsafe {
             LoadCursorW(None, windows::core::PCWSTR(cur_name.as_ptr()))
         }
