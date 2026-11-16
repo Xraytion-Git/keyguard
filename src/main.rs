@@ -194,13 +194,15 @@ unsafe extern "system" fn keyboard_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // nCode < 0 必须传递给下一个钩子
     if n_code < 0 {
         return CallNextHookEx(None, n_code, wparam, lparam);
     }
 
     // 只拦"按下"事件（WM_KEYDOWN=0x0100, WM_SYSKEYDOWN=0x0104）
+    // 其他事件必须 CallNextHookEx 传递，否则破坏钩子链
     if wparam.0 != 0x0100 && wparam.0 != 0x0104 {
-        return LRESULT(0);
+        return CallNextHookEx(None, n_code, wparam, lparam);
     }
 
     #[repr(C)]
@@ -214,20 +216,20 @@ unsafe extern "system" fn keyboard_proc(
 
     let raw = lparam.0 as *const KbdLlHookStruct;
     if raw.is_null() {
-        return LRESULT(0);
+        return CallNextHookEx(None, n_code, wparam, lparam);
     }
     let hook_struct = unsafe { &*raw };
     let vk = hook_struct.vk_code;
     let flags = hook_struct.flags;
 
-    // 拦截开关：关闭时直接放行
+    // 拦截开关：关闭时放行
     if !ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
-        return LRESULT(0);
+        return CallNextHookEx(None, n_code, wparam, lparam);
     }
 
-    // LLKHF_INJECTED = 0x10：软件注入的按键直接放行（不影响音量/媒体键等）
+    // LLKHF_INJECTED = 0x10：软件注入的按键放行（不影响音量/媒体键等）
     if flags & 0x10 != 0 {
-        return LRESULT(0);
+        return CallNextHookEx(None, n_code, wparam, lparam);
     }
 
     // 当前按下的修饰键
@@ -244,11 +246,12 @@ unsafe extern "system" fn keyboard_proc(
     if let Ok(blocked) = BLOCKED.lock() {
         for &(b_mods, b_vk) in blocked.iter() {
             if b_vk as u32 == vk && (b_mods & mods) == b_mods {
-                return LRESULT(1);
+                return LRESULT(1); // 吃掉，不传递
             }
         }
     }
-    LRESULT(0)
+    // 未命中：必须 CallNextHookEx 传递给下一个钩子
+    CallNextHookEx(None, n_code, wparam, lparam)
 }
 
 // ============================================================
@@ -430,9 +433,8 @@ fn handle_tray_message(hwnd: HWND, lparam: i32) {
                     let _ = std::process::Command::new("explorer").arg(dir).spawn();
                 }
             } else if cmd == mid_quit {
-                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                // 发 WM_QUIT 让消息循环自然退出，走 UnhookWindowsHookEx 清理
                 let _ = PostMessageW(Some(hwnd), WM_QUIT, WPARAM(0), LPARAM(0));
-                std::process::exit(0);
             }
             let _ = DeleteMenu(hmenu, 0, MF_BYCOMMAND | MF_BYPOSITION);
         }
