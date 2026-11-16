@@ -225,9 +225,9 @@ unsafe extern "system" fn keyboard_proc(
         return LRESULT(0);
     }
 
-    // LLKHF_INJECTED = 0x10：跳过软件注入的按键
+    // LLKHF_INJECTED = 0x10：软件注入的按键直接放行（不影响音量/媒体键等）
     if flags & 0x10 != 0 {
-        return LRESULT(1);
+        return LRESULT(0);
     }
 
     // 当前按下的修饰键
